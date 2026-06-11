@@ -32,6 +32,12 @@ const CATEGORY_FILTERS: Record<PlaceCategory, string[]> = {
   museum: ['["tourism"="museum"]', '["amenity"="museum"]'],
   park: ['["leisure"="park"]', '["leisure"="garden"]'],
   hotel: ['["tourism"="hotel"]', '["tourism"="hostel"]'],
+  grocery: [
+    '["shop"="supermarket"]',
+    '["shop"="convenience"]',
+    '["shop"="general"]',
+    '["shop"="kiosk"]',
+  ],
   other: [
     '["amenity"="restaurant"]',
     '["amenity"="cafe"]',

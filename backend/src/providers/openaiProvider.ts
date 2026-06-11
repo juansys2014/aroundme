@@ -16,6 +16,7 @@ export type PlaceCategory =
   | "hotel"
   | "cafe"
   | "bar"
+  | "grocery"
   | "other";
 
 export type IntentAnalysis = {
@@ -115,6 +116,7 @@ const CATEGORIES = new Set<PlaceCategory>([
   "hotel",
   "cafe",
   "bar",
+  "grocery",
   "other",
 ]);
 
@@ -158,10 +160,11 @@ export async function interpretQuestionIntent(
     : "Sin perfil de usuario.";
 
   const system = `Eres un clasificador de intenciones para una app de guía local. Responde SOLO un JSON válido con esta forma exacta:
-{"intent":"places"|"city_facts"|"where_am_i"|"general_local"|"unknown","category":"restaurant"|"park"|"museum"|"hotel"|"cafe"|"bar"|"other","searchQuery":"string","language":"es"|"en"}
+{"intent":"places"|"city_facts"|"where_am_i"|"general_local"|"unknown","category":"restaurant"|"park"|"museum"|"hotel"|"cafe"|"bar"|"grocery"|"other","searchQuery":"string","language":"es"|"en"}
 
 Reglas:
-- intent=places: buscar locales físicos (restaurantes, bares, parques, plazas, museos, hoteles, cafés).
+- intent=places: buscar locales físicos (restaurantes, bares, parques, plazas, museos, hoteles, cafés, supermercados, almacenes, farmacias).
+- category=grocery: supermercados, almacenes, minimarkets, tiendas de barrio.
 - intent=city_facts: población, industria, historia estadística, datos enciclopédicos de la ciudad.
 - intent=where_am_i: el usuario pregunta dónde está, en qué lugar/ciudad se encuentra, o cómo se llama el sitio actual.
 - intent=general_local: charla, saludos de seguimiento, preguntas abiertas, qué hacer en la zona, continuar la conversación, agradecimientos, despedidas, o turismo amplio sin encaje claro en places ni city_facts.

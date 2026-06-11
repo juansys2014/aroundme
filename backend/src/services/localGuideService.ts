@@ -52,12 +52,21 @@ const PLACE_KEYWORDS = [
   "turist",
   "atraccion",
   "monumento",
+  "supermercado",
+  "supermercados",
+  "mercado",
+  "almacen",
+  "kiosco",
+  "farmacia",
+  "tienda",
   "restaurant",
   "eat",
   "food",
   "coffee",
   "park",
   "museum",
+  "grocery",
+  "supermarket",
 ];
 
 function isPlaceLikeQuestion(question: string): boolean {
@@ -325,6 +334,15 @@ function keywordFallbackIntent(request: AssistantRequest): IntentAnalysis {
       intent: "city_facts",
       category: "other",
       searchQuery: request.question.trim() || "datos ciudad",
+      language: lang,
+    };
+  }
+  const groceryHints = ["supermercado", "mercado", "almacen", "minimarket", "kiosco", "grocery", "supermarket"];
+  if (groceryHints.some((h) => n.includes(h))) {
+    return {
+      intent: "places",
+      category: "grocery",
+      searchQuery: request.question.trim() || "supermercado",
       language: lang,
     };
   }

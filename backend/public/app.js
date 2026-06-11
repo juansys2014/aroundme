@@ -29,6 +29,8 @@ let chatMicRestartFn = null;
 let dialogMicWanted = false;
 let lastGeocodeAt = 0;
 let lastLocationRenderAt = 0;
+const MIC_FLUSH_MS = 1400;
+const MIC_RESTART_AFTER_SPEECH_MS = 1500;
 
 function isMobileDevice() {
   if (typeof window === "undefined") return false;
@@ -608,8 +610,12 @@ function scoreVoiceForLocale(voice, locale) {
   if (loc === "en-gb" && (lang === "en-gb" || name.includes("united kingdom") || name.includes("british"))) {
     score += 10;
   }
-  if (/google|natural|premium|enhanced|neural|wavenet|online/.test(name)) score += 12;
-  if (/compact|espeak|robotic|synthetic|microsoft david|microsoft helena/.test(name)) score -= 8;
+  if (/google|natural|premium|enhanced|neural|wavenet|online|samantha|paulina|helena|luciana|diego|monica/.test(name)) {
+    score += 12;
+  }
+  if (/compact|espeak|robotic|synthetic|microsoft david|microsoft helena|android default/.test(name)) {
+    score -= 10;
+  }
   return score;
 }
 
@@ -892,8 +898,9 @@ function speakText(text, onEnd) {
   if (state.screen === "chat") render();
   const utter = new SpeechSynthesisUtterance(text.trim());
   utter.lang = getSpeechLang();
-  utter.rate = 0.92;
-  utter.pitch = 1.02;
+  utter.rate = 0.86;
+  utter.pitch = 0.98;
+  utter.volume = 1;
   const voice = pickVoice();
   if (voice) utter.voice = voice;
   const finish = () => {
@@ -1137,6 +1144,23 @@ function respondAssistant(text, options = {}) {
   persistChatHistory();
 }
 
+function isLikelyAssistantEcho(text) {
+  const n = normalizeForMatch(String(text).trim());
+  if (!n || n.length > 120) return false;
+  const echoHints = [
+    "en que puedo ayudarte",
+    "puedo ayudarte",
+    "que te interesa",
+    "decime si buscas",
+    "soy tu guia local",
+    "puntos de interes",
+    "lugares cerca",
+    "how can i help",
+    "local guide",
+  ];
+  return echoHints.some((h) => n.includes(h));
+}
+
 function afterAssistantSpeech(text, listenCallback) {
   if (!state.voiceReplyEnabled && !state.voiceDialogMode) return;
   if (state.voiceDialogMode) dialogMicWanted = true;
@@ -1145,13 +1169,13 @@ function afterAssistantSpeech(text, listenCallback) {
     state.voiceDialogMode && listenCallback
       ? () => {
           if (token !== voiceFlowToken) return;
-          scheduleMicRestart(500);
+          scheduleMicRestart(MIC_RESTART_AFTER_SPEECH_MS);
         }
       : undefined;
   speakText(text, onDone);
 }
 
-function startListening(onFinal, onError) {
+function startListening(onFinal, onError, options = {}) {
   if (!SpeechRecognitionCtor) {
     onError("Tu navegador no soporta voz. Probá Chrome o Edge.");
     return;
@@ -1161,29 +1185,84 @@ function startListening(onFinal, onError) {
 
   const rec = new SpeechRecognitionCtor();
   rec.lang = getSpeechLang();
-  const dialogSession = state.voiceDialogMode && dialogMicWanted;
-  rec.interimResults = dialogSession;
-  rec.continuous = dialogSession;
+  rec.interimResults = true;
+  rec.continuous = true;
+  rec.maxAlternatives = 1;
   activeRecognition = rec;
   state.listening = true;
   if (state.screen === "chat") render();
 
-  rec.onresult = (event) => {
-    const last = event.results[event.results.length - 1];
-    if (!last) return;
-    const text = last[0]?.transcript?.trim() ?? "";
-    if (!text) return;
-    if (isStopVoiceCommand(text) && last.isFinal) {
+  let committed = "";
+  let flushTimer = null;
+  let delivered = false;
+
+  const deliverTranscript = (forceSend) => {
+    if (delivered) return;
+    const text = committed.trim();
+    committed = "";
+    if (!text) {
+      if (forceSend) {
+        onError("No se entendió nada. Hablá claro y cerca del micrófono.");
+      } else if (state.voiceDialogMode && dialogMicWanted) {
+        scheduleMicRestart(700);
+      }
+      return;
+    }
+    if (isLikelyAssistantEcho(text)) {
+      if (state.voiceDialogMode && dialogMicWanted) scheduleMicRestart(700);
+      return;
+    }
+    if (isStopVoiceCommand(text)) {
       handleUserStop(text);
       return;
     }
-    if (last.isFinal) onFinal(text);
+    delivered = true;
+    stopListening();
+    onFinal(text);
+  };
+
+  const scheduleFlush = () => {
+    if (flushTimer) clearTimeout(flushTimer);
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      deliverTranscript(false);
+    }, MIC_FLUSH_MS);
+  };
+
+  rec.onresult = (event) => {
+    let interim = "";
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const r = event.results[i];
+      const t = r[0]?.transcript?.trim() ?? "";
+      if (!t) continue;
+      if (r.isFinal) {
+        committed = `${committed} ${t}`.trim();
+      } else {
+        interim = t;
+      }
+    }
+    const preview = `${committed}${interim ? ` ${interim}` : ""}`.trim();
+    if (options.onPartial) options.onPartial(preview);
+    if (committed || interim) scheduleFlush();
   };
 
   rec.onerror = (event) => {
     const code = event?.error ?? "";
+    if (code === "no-speech") {
+      if (committed.trim()) {
+        deliverTranscript(true);
+        return;
+      }
+      stopListening();
+      if (dialogMicWanted && state.voiceDialogMode) {
+        scheduleMicRestart(700);
+        return;
+      }
+      onError("No se escuchó nada. Probá de nuevo, más cerca del micrófono.");
+      return;
+    }
     stopListening();
-    if (dialogMicWanted && (code === "no-speech" || code === "aborted")) {
+    if (dialogMicWanted && code === "aborted") {
       scheduleMicRestart(350);
       return;
     }
@@ -1194,14 +1273,20 @@ function startListening(onFinal, onError) {
   rec.onend = () => {
     activeRecognition = null;
     state.listening = false;
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    if (!delivered && committed.trim()) deliverTranscript(true);
     if (
+      !delivered &&
       dialogMicWanted &&
       state.voiceDialogMode &&
       !state.speaking &&
       !state.sending &&
       state.screen === "chat"
     ) {
-      scheduleMicRestart(350);
+      scheduleMicRestart(700);
     }
     if (state.screen === "chat") render();
   };
@@ -1750,6 +1835,15 @@ function renderChat() {
       (msg) => {
         voiceError.textContent = msg;
         render();
+      },
+      {
+        onPartial: (preview) => {
+          if (preview) {
+            input.value = preview;
+            input.placeholder = "Escuchando…";
+          }
+          render();
+        },
       }
     );
     render();
@@ -1992,6 +2086,13 @@ function renderSettings() {
 
   const voices = state.speechVoices.length ? state.speechVoices : getBrowserVoices();
   screen.appendChild(el("div", "label", "Locutor"));
+  screen.appendChild(
+    el(
+      "p",
+      "voice-hint",
+      "Elegí una voz con «Google» o «Natural» si aparece. Usá «Probar voz» antes de volver al chat."
+    )
+  );
   if (voices.length === 0) {
     screen.appendChild(
       el("p", "voice-hint", "Cargando voces… Si no aparecen, probá Chrome o Edge y recargá la página.")
@@ -2004,10 +2105,12 @@ function renderSettings() {
     autoOpt.textContent = "Automática (según región)";
     voiceSelect.appendChild(autoOpt);
     const current = getStoredVoiceUri();
-    for (const v of voices) {
+    for (let i = 0; i < voices.length; i++) {
+      const v = voices[i];
       const opt = document.createElement("option");
       opt.value = v.voiceURI;
-      opt.textContent = `${v.name} — ${v.lang}`;
+      const tag = i === 0 && !current ? " ★ recomendada" : "";
+      opt.textContent = `${v.name} — ${v.lang}${tag}`;
       if (v.voiceURI === current) opt.selected = true;
       voiceSelect.appendChild(opt);
     }
