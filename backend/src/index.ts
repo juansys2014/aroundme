@@ -11,6 +11,7 @@ import { memoryRouter } from "./routes/memory.js";
 import { placesRouter } from "./routes/places.js";
 import { profileRouter } from "./routes/profile.js";
 import { providersRouter } from "./routes/providers.js";
+import { ttsRouter } from "./routes/tts.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "../public");
@@ -26,6 +27,7 @@ app.use("/api/profile", profileRouter);
 app.use("/api/memory", memoryRouter);
 app.use("/api/assistant", assistantRouter);
 app.use("/api/providers", providersRouter);
+app.use("/api/tts", ttsRouter);
 app.use("/api/places", placesRouter);
 
 app.use(express.static(publicDir));

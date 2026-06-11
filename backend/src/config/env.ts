@@ -11,6 +11,8 @@ function parsePort(raw: string | undefined, fallback: number): number {
 
 const DEFAULT_PORT = 3011;
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
+const DEFAULT_OPENAI_TTS_MODEL = "tts-1";
+const DEFAULT_OPENAI_TTS_VOICE = "nova";
 
 /**
  * Configuración centralizada (sin efectos secundarios al importar).
@@ -22,6 +24,11 @@ export const env = {
   openaiApiKey: (process.env.OPENAI_API_KEY ?? "").trim(),
   googlePlacesApiKey: (process.env.GOOGLE_PLACES_API_KEY ?? "").trim(),
   openaiModel: (process.env.OPENAI_MODEL ?? DEFAULT_OPENAI_MODEL).trim() || DEFAULT_OPENAI_MODEL,
+  openaiTtsModel:
+    (process.env.OPENAI_TTS_MODEL ?? DEFAULT_OPENAI_TTS_MODEL).trim() || DEFAULT_OPENAI_TTS_MODEL,
+  openaiTtsDefaultVoice:
+    (process.env.OPENAI_TTS_VOICE ?? DEFAULT_OPENAI_TTS_VOICE).trim().toLowerCase() ||
+    DEFAULT_OPENAI_TTS_VOICE,
   /** Si es true, se pueden usar providers reales (OpenAI, Places) según keys. */
   enableRealProviders: parseBool(process.env.ENABLE_REAL_PROVIDERS, false),
   jwtSecret: (process.env.JWT_SECRET ?? "").trim(),

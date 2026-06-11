@@ -6,6 +6,17 @@ const VOICE_REPLY_KEY = "LOCALGUIDE_VOICE_REPLY";
 const VOICE_DIALOG_KEY = "LOCALGUIDE_VOICE_DIALOG";
 const VOICE_URI_KEY = "LOCALGUIDE_VOICE_URI";
 const SPEECH_LOCALE_KEY = "LOCALGUIDE_SPEECH_LOCALE";
+const TTS_ENGINE_KEY = "LOCALGUIDE_TTS_ENGINE";
+const OPENAI_VOICE_KEY = "LOCALGUIDE_OPENAI_VOICE";
+
+const OPENAI_TTS_VOICES = [
+  { id: "nova", label: "Nova — cálida (recomendada, tipo ChatGPT)" },
+  { id: "shimmer", label: "Shimmer — suave" },
+  { id: "alloy", label: "Alloy — neutra" },
+  { id: "echo", label: "Echo — masculina" },
+  { id: "fable", label: "Fable — narrativa" },
+  { id: "onyx", label: "Onyx — grave" },
+];
 
 const SPEECH_LOCALE_OPTIONS = [
   { id: "es-AR", label: "Español (Argentina)" },
@@ -29,6 +40,8 @@ let chatMicRestartFn = null;
 let dialogMicWanted = false;
 let lastGeocodeAt = 0;
 let lastLocationRenderAt = 0;
+let activeTtsAudio = null;
+let activeTtsObjectUrl = null;
 const MIC_FLUSH_MS = 1400;
 const MIC_RESTART_AFTER_SPEECH_MS = 1500;
 
@@ -158,6 +171,9 @@ let state = {
   voiceDialogMode: false,
   selectedVoiceUri: "",
   speechVoices: [],
+  openaiTtsEnabled: false,
+  ttsEngine: "openai",
+  openaiVoice: "nova",
   suggestedPlaces: [],
   selectedPlace: null,
 };
@@ -485,6 +501,50 @@ async function fetchServerStatus() {
   }
 }
 
+async function fetchProvidersStatus() {
+  try {
+    const res = await fetch("/api/providers/status");
+    if (!res.ok) return {};
+    return await res.json();
+  } catch {
+    return {};
+  }
+}
+
+function getTtsEngine() {
+  try {
+    const v = localStorage.getItem(TTS_ENGINE_KEY);
+    if (v === "browser" || v === "openai") return v;
+  } catch {
+    // ignore
+  }
+  return state.openaiTtsEnabled ? "openai" : "browser";
+}
+
+function setTtsEngine(engine) {
+  localStorage.setItem(TTS_ENGINE_KEY, engine);
+  state.ttsEngine = engine;
+}
+
+function getOpenAiVoice() {
+  try {
+    const v = localStorage.getItem(OPENAI_VOICE_KEY);
+    if (v && OPENAI_TTS_VOICES.some((x) => x.id === v)) return v;
+  } catch {
+    // ignore
+  }
+  return state.openaiVoice || "nova";
+}
+
+function setOpenAiVoice(voice) {
+  localStorage.setItem(OPENAI_VOICE_KEY, voice);
+  state.openaiVoice = voice;
+}
+
+function shouldUseOpenAiTts() {
+  return state.openaiTtsEnabled && getTtsEngine() === "openai";
+}
+
 async function loadSessionFromServer() {
   const meRes = await apiFetch("/api/auth/me");
   if (!meRes.ok) throw new Error("Sesión inválida");
@@ -693,6 +753,19 @@ function stopSpeaking() {
   if (typeof window !== "undefined" && window.speechSynthesis) {
     window.speechSynthesis.cancel();
   }
+  if (activeTtsAudio) {
+    try {
+      activeTtsAudio.pause();
+      activeTtsAudio.src = "";
+    } catch {
+      // ignore
+    }
+    activeTtsAudio = null;
+  }
+  if (activeTtsObjectUrl) {
+    URL.revokeObjectURL(activeTtsObjectUrl);
+    activeTtsObjectUrl = null;
+  }
   state.speaking = false;
 }
 
@@ -704,10 +777,12 @@ function clearVoiceResumeTimer() {
 }
 
 function isAssistantVoiceBusy() {
+  const ttsPlaying = activeTtsAudio && !activeTtsAudio.paused && !activeTtsAudio.ended;
   return (
     state.speaking ||
     state.listening ||
     voiceResumeTimer != null ||
+    ttsPlaying ||
     (typeof window !== "undefined" &&
       window.speechSynthesis &&
       window.speechSynthesis.speaking)
@@ -886,8 +961,8 @@ function openChatScreen(options = {}) {
   }
 }
 
-function speakText(text, onEnd) {
-  if (!text?.trim() || !window.speechSynthesis) {
+async function speakText(text, onEnd) {
+  if (!text?.trim()) {
     if (onEnd) onEnd();
     return;
   }
@@ -896,6 +971,44 @@ function speakText(text, onEnd) {
   const token = voiceFlowToken;
   state.speaking = true;
   if (state.screen === "chat") render();
+
+  const finish = () => {
+    if (token !== voiceFlowToken) return;
+    state.speaking = false;
+    if (state.screen === "chat" || state.screen === "settings") render();
+    if (onEnd) onEnd();
+  };
+
+  if (shouldUseOpenAiTts()) {
+    try {
+      const res = await apiFetch("/api/tts/speak", {
+        method: "POST",
+        body: JSON.stringify({ text: text.trim(), voice: getOpenAiVoice() }),
+      });
+      if (!res.ok) throw new Error("OpenAI TTS failed");
+      const blob = await res.blob();
+      if (token !== voiceFlowToken) {
+        finish();
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      activeTtsObjectUrl = url;
+      const audio = new Audio(url);
+      activeTtsAudio = audio;
+      audio.onended = finish;
+      audio.onerror = finish;
+      await audio.play();
+      return;
+    } catch {
+      // fallback al navegador
+    }
+  }
+
+  if (!window.speechSynthesis) {
+    finish();
+    return;
+  }
+
   const utter = new SpeechSynthesisUtterance(text.trim());
   utter.lang = getSpeechLang();
   utter.rate = 0.86;
@@ -903,12 +1016,6 @@ function speakText(text, onEnd) {
   utter.volume = 1;
   const voice = pickVoice();
   if (voice) utter.voice = voice;
-  const finish = () => {
-    if (token !== voiceFlowToken) return;
-    state.speaking = false;
-    if (state.screen === "chat" || state.screen === "settings") render();
-    if (onEnd) onEnd();
-  };
   utter.onstart = () => {
     if (token !== voiceFlowToken) return;
     state.speaking = true;
@@ -2062,11 +2169,70 @@ function renderSettings() {
   screen.appendChild(budgetRow);
 
   screen.appendChild(el("h3", "settings-section", "Voz del asistente"));
-  screen.appendChild(
-    el("p", "hint", "Para sonar más natural, elegí una voz «Google» o «Enhanced» en Locutor y probala abajo.")
-  );
+  const ttsEngine = getTtsEngine();
+  if (state.openaiTtsEnabled) {
+    screen.appendChild(
+      el(
+        "p",
+        "hint",
+        "Voz OpenAI: natural, similar a ChatGPT. Recomendada en celular (Samsung, etc.)."
+      )
+    );
+    screen.appendChild(el("div", "label", "Motor de voz"));
+    const engineRow = el("div", "row");
+    const openaiChip = el(
+      "button",
+      "chip" + (ttsEngine === "openai" ? " on" : ""),
+      "OpenAI (natural)"
+    );
+    openaiChip.type = "button";
+    openaiChip.onclick = () => {
+      setTtsEngine("openai");
+      render();
+    };
+    const browserChip = el(
+      "button",
+      "chip" + (ttsEngine === "browser" ? " on" : ""),
+      "Navegador"
+    );
+    browserChip.type = "button";
+    browserChip.onclick = () => {
+      setTtsEngine("browser");
+      render();
+    };
+    engineRow.appendChild(openaiChip);
+    engineRow.appendChild(browserChip);
+    screen.appendChild(engineRow);
 
-  screen.appendChild(el("div", "label", "Acento / región"));
+    if (ttsEngine === "openai") {
+      screen.appendChild(el("div", "label", "Voz OpenAI"));
+      const openaiSelect = document.createElement("select");
+      openaiSelect.className = "voice-select";
+      const currentOpenAi = getOpenAiVoice();
+      for (const v of OPENAI_TTS_VOICES) {
+        const opt = document.createElement("option");
+        opt.value = v.id;
+        opt.textContent = v.label;
+        if (v.id === currentOpenAi) opt.selected = true;
+        openaiSelect.appendChild(opt);
+      }
+      openaiSelect.onchange = () => {
+        setOpenAiVoice(openaiSelect.value);
+        void speakText(
+          draft.language === "en"
+            ? "Hello, this is how I will sound from now on."
+            : "Hola, así voy a sonar a partir de ahora."
+        );
+      };
+      screen.appendChild(openaiSelect);
+    }
+  } else {
+    screen.appendChild(
+      el("p", "hint", "OpenAI TTS no disponible en el servidor. Se usa la voz del navegador.")
+    );
+  }
+
+  screen.appendChild(el("div", "label", "Acento / región (micrófono y voz del navegador)"));
   const localeSelect = document.createElement("select");
   localeSelect.className = "voice-select";
   for (const opt of SPEECH_LOCALE_OPTIONS) {
@@ -2085,50 +2251,52 @@ function renderSettings() {
   screen.appendChild(localeSelect);
 
   const voices = state.speechVoices.length ? state.speechVoices : getBrowserVoices();
-  screen.appendChild(el("div", "label", "Locutor"));
-  screen.appendChild(
-    el(
-      "p",
-      "voice-hint",
-      "Elegí una voz con «Google» o «Natural» si aparece. Usá «Probar voz» antes de volver al chat."
-    )
-  );
-  if (voices.length === 0) {
+  if (!state.openaiTtsEnabled || ttsEngine === "browser") {
+    screen.appendChild(el("div", "label", "Locutor del navegador"));
     screen.appendChild(
-      el("p", "voice-hint", "Cargando voces… Si no aparecen, probá Chrome o Edge y recargá la página.")
+      el(
+        "p",
+        "voice-hint",
+        "Solo aplica si elegiste «Navegador». En celular suele haber una sola voz."
+      )
     );
-  } else {
-    const voiceSelect = document.createElement("select");
-    voiceSelect.className = "voice-select";
-    const autoOpt = document.createElement("option");
-    autoOpt.value = "";
-    autoOpt.textContent = "Automática (según región)";
-    voiceSelect.appendChild(autoOpt);
-    const current = getStoredVoiceUri();
-    for (let i = 0; i < voices.length; i++) {
-      const v = voices[i];
-      const opt = document.createElement("option");
-      opt.value = v.voiceURI;
-      const tag = i === 0 && !current ? " ★ recomendada" : "";
-      opt.textContent = `${v.name} — ${v.lang}${tag}`;
-      if (v.voiceURI === current) opt.selected = true;
-      voiceSelect.appendChild(opt);
-    }
-    voiceSelect.onchange = () => {
-      if (voiceSelect.value) setStoredVoiceUri(voiceSelect.value);
-      else {
-        localStorage.removeItem(VOICE_URI_KEY);
-        state.selectedVoiceUri = "";
+    if (voices.length === 0) {
+      screen.appendChild(
+        el("p", "voice-hint", "Cargando voces… Recargá la página si no aparecen.")
+      );
+    } else {
+      const voiceSelect = document.createElement("select");
+      voiceSelect.className = "voice-select";
+      const autoOpt = document.createElement("option");
+      autoOpt.value = "";
+      autoOpt.textContent = "Automática (según región)";
+      voiceSelect.appendChild(autoOpt);
+      const current = getStoredVoiceUri();
+      for (let i = 0; i < voices.length; i++) {
+        const v = voices[i];
+        const opt = document.createElement("option");
+        opt.value = v.voiceURI;
+        const tag = i === 0 && !current ? " ★ recomendada" : "";
+        opt.textContent = `${v.name} — ${v.lang}${tag}`;
+        if (v.voiceURI === current) opt.selected = true;
+        voiceSelect.appendChild(opt);
       }
-      speakText("Así voy a sonar a partir de ahora.");
-    };
-    screen.appendChild(voiceSelect);
+      voiceSelect.onchange = () => {
+        if (voiceSelect.value) setStoredVoiceUri(voiceSelect.value);
+        else {
+          localStorage.removeItem(VOICE_URI_KEY);
+          state.selectedVoiceUri = "";
+        }
+        void speakText("Así voy a sonar a partir de ahora.");
+      };
+      screen.appendChild(voiceSelect);
+    }
   }
 
   const testVoiceBtn = el("button", "btn secondary", "Probar voz");
   testVoiceBtn.type = "button";
   testVoiceBtn.onclick = () => {
-    speakText(
+    void speakText(
       draft.language === "en"
         ? "Hello, I am your local guide."
         : "Hola, soy tu guía local. Así voy a sonar."
@@ -2222,6 +2390,8 @@ function renderSettings() {
     localStorage.removeItem(VOICE_DIALOG_KEY);
     localStorage.removeItem(VOICE_URI_KEY);
     localStorage.removeItem(SPEECH_LOCALE_KEY);
+    localStorage.removeItem(TTS_ENGINE_KEY);
+    localStorage.removeItem(OPENAI_VOICE_KEY);
     state.screen = state.authRequired ? "setup" : "setup";
     state.settingsDraft = null;
     render();
@@ -2237,6 +2407,15 @@ async function boot() {
   if (state.voiceDialogMode) dialogMicWanted = true;
   state.selectedVoiceUri = getStoredVoiceUri();
   state.speechLocale = getSpeechLocale();
+  state.openaiVoice = getOpenAiVoice();
+
+  const providers = await fetchProvidersStatus();
+  state.openaiTtsEnabled = Boolean(providers.openaiTtsEnabled);
+  state.ttsEngine = getTtsEngine();
+  if (state.openaiTtsEnabled && !localStorage.getItem(TTS_ENGINE_KEY)) {
+    setTtsEngine("openai");
+  }
+
   initSpeechVoices();
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && state.screen === "chat" && isAssistantVoiceBusy()) {
