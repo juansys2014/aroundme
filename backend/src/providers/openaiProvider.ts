@@ -47,6 +47,7 @@ type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 async function callOpenAIChat(params: {
   messages: ChatMessage[];
   jsonMode: boolean;
+  temperature?: number;
 }): Promise<string | null> {
   const apiKey = env.openaiApiKey;
   if (!apiKey) return null;
@@ -58,7 +59,7 @@ async function callOpenAIChat(params: {
     const body: Record<string, unknown> = {
       model: env.openaiModel,
       messages: params.messages,
-      temperature: 0.2,
+      temperature: params.temperature ?? 0.2,
     };
     if (params.jsonMode) {
       body.response_format = { type: "json_object" };
@@ -76,9 +77,7 @@ async function callOpenAIChat(params: {
 
     const raw = await res.text();
     if (!res.ok) {
-      if (process.env.NODE_ENV !== "production") {
-        console.error("OpenAI: HTTP", res.status);
-      }
+      console.error("OpenAI: HTTP", res.status);
       return null;
     }
 
@@ -165,8 +164,8 @@ Reglas:
 - intent=places: buscar locales físicos (restaurantes, bares, parques, plazas, museos, hoteles, cafés).
 - intent=city_facts: población, industria, historia estadística, datos enciclopédicos de la ciudad.
 - intent=where_am_i: el usuario pregunta dónde está, en qué lugar/ciudad se encuentra, o cómo se llama el sitio actual.
-- intent=general_local: turismo amplio sin encaje claro en places ni city_facts.
-- intent=unknown: saludos, charla, o fuera de alcance.
+- intent=general_local: charla, saludos de seguimiento, preguntas abiertas, qué hacer en la zona, continuar la conversación, agradecimientos, despedidas, o turismo amplio sin encaje claro en places ni city_facts.
+- intent=unknown: solo temas totalmente ajenos a una guía local (programación, recetas sin lugar, etc.) o mensajes incomprensibles.
 - searchQuery: texto corto para Google Places Text Search cuando intent=places. Para city_facts u otros intents, usa una reformulación breve de la pregunta (nunca cadena vacía).
 - language: idioma preferido de la respuesta (es o en), alineado al perfil o al idioma de la pregunta.
 - No incluyas explicación fuera del JSON.`;
@@ -235,4 +234,112 @@ REGLAS ESTRICTAS:
 
   if (!content || !content.trim()) return null;
   return { text: content.trim() };
+}
+
+export type ConversationalParams = {
+  question: string;
+  userProfile?: UserProfile;
+  coordinates: Coordinates;
+  conversationHistory?: ConversationTurn[];
+  savedPlaces?: SavedPlace[];
+};
+
+/**
+ * Respuesta conversacional cuando no hay lugares/hechos de APIs.
+ * Permite charla natural usando perfil e historial, sin inventar negocios ni datos.
+ */
+export async function composeConversationalAnswer(
+  params: ConversationalParams
+): Promise<{ text: string } | null> {
+  if (!env.openaiApiKey) return null;
+
+  const lang = params.userProfile?.language ?? "es";
+  const payload = {
+    question: params.question,
+    userProfile: params.userProfile ?? null,
+    conversationHistory: params.conversationHistory?.slice(-16) ?? [],
+    savedPlaces: params.savedPlaces ?? [],
+  };
+
+  const system = `Eres un guía local amable y conversacional. Respondé en ${lang === "en" ? "inglés" : "español rioplatense (vos, dale, etc.)"} salvo que la pregunta esté claramente en otro idioma.
+
+REGLAS:
+- Respondé de forma natural y distinta en cada turno; evitá frases plantilla repetidas.
+- Podés charlar, hacer preguntas de seguimiento y referirte al historial o lugares apuntados si aparecen en el JSON.
+- NO inventes nombres de restaurantes, direcciones, ratings, población ni estadísticas concretas.
+- Si el usuario pide recomendaciones concretas de locales, sugerile que sea específico (por ejemplo «restaurantes de pasta cerca» o «parques cerca») para poder buscar.
+- Podés explicar brevemente qué podés hacer: buscar lugares cerca, decir dónde está, datos de la ciudad, recordar lugares que apuntó.
+- Respuestas cortas: 1–4 oraciones salvo que pidan más detalle.
+- No menciones APIs, claves, GPS, coordenadas ni detalles internos del sistema.
+- No uses el nombre del usuario en cada respuesta; solo en saludos o si preguntan cómo se llaman.`;
+
+  const user = `CONTEXTO_JSON:\n${JSON.stringify(payload)}`;
+
+  const content = await callOpenAIChat({
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+    jsonMode: false,
+    temperature: 0.75,
+  });
+
+  if (!content || !content.trim()) return null;
+  return { text: content.trim() };
+}
+
+export type OpenAIVerifyResult = {
+  ok: boolean;
+  model?: string;
+  error?: string;
+};
+
+/** Prueba mínima de conectividad con OpenAI (para diagnóstico). */
+export async function verifyOpenAIConnection(): Promise<OpenAIVerifyResult> {
+  if (!env.openaiApiKey) {
+    return { ok: false, error: "OPENAI_API_KEY no configurada" };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(OPENAI_CHAT_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.openaiApiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: env.openaiModel,
+        messages: [{ role: "user", content: "Responde solo: ok" }],
+        max_tokens: 5,
+        temperature: 0,
+      }),
+      signal: controller.signal,
+    });
+
+    const raw = await res.text();
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const err = JSON.parse(raw) as { error?: { message?: string } };
+        if (err.error?.message) detail = err.error.message;
+      } catch {
+        /* ignore */
+      }
+      return { ok: false, model: env.openaiModel, error: detail };
+    }
+
+    return { ok: true, model: env.openaiModel };
+  } catch (e) {
+    const name = e instanceof Error ? e.name : "error";
+    return {
+      ok: false,
+      model: env.openaiModel,
+      error: name === "AbortError" ? "timeout" : name,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }

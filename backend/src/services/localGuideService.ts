@@ -3,6 +3,7 @@ import { searchNearbyPlaces } from "../providers/googlePlacesProvider.js";
 import { searchOsmNearby } from "../providers/osmProvider.js";
 import {
   composeAssistantAnswer,
+  composeConversationalAnswer,
   interpretQuestionIntent,
   type IntentAnalysis,
   type PlaceCategory,
@@ -174,14 +175,38 @@ function buildGreetingAnswer(request: AssistantRequest, lang: "es" | "en"): stri
   return `${hi} Soy tu guía local — preguntame por lugares cerca o decime «¿dónde estoy?».`;
 }
 
+const FALLBACK_LINES_ES = [
+  "Contame qué buscás: comer, un paseo, un museo, o si querés saber dónde estás.",
+  "Puedo buscar lugares cerca, contarte datos de la ciudad o decirte dónde estás. ¿Qué te interesa?",
+  "Si me decís qué tipo de lugar querés (restaurante, parque, café…), te ayudo a encontrarlo.",
+  "Estoy acá para la zona: lugares cerca, dónde estás, o lo que charlamos antes. ¿Seguimos con qué?",
+];
+
+const FALLBACK_LINES_EN = [
+  "Tell me what you're looking for — food, a walk, a museum, or where you are right now.",
+  "I can find nearby places, share city facts, or tell you where you are. What interests you?",
+  "If you say what kind of place you want (restaurant, park, café…), I can search for it.",
+  "I'm here for the area: nearby spots, your location, or what we talked about before. What's next?",
+];
+
+function pickVariedLine(lines: string[], seed: string): string {
+  if (lines.length === 0) return "";
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) {
+    h = (h + seed.charCodeAt(i) * (i + 1)) % lines.length;
+  }
+  return lines[h];
+}
+
 function buildHelpfulFallback(request: AssistantRequest, lang: "es" | "en"): string {
   if (isGreetingQuestion(request.question)) {
     return buildGreetingAnswer(request, lang);
   }
+  const seed = `${request.question}|${request.conversationHistory?.length ?? 0}`;
   if (lang === "en") {
-    return "I can help you find nearby restaurants, parks, museums and more, or tell you where you are. What would you like to know?";
+    return pickVariedLine(FALLBACK_LINES_EN, seed);
   }
-  return "Puedo ayudarte a buscar restaurantes, lugares y datos de la zona, o decirte dónde estás. ¿Qué querés saber?";
+  return pickVariedLine(FALLBACK_LINES_ES, seed);
 }
 
 function memoryPayload(request: AssistantRequest) {
@@ -193,13 +218,10 @@ function memoryPayload(request: AssistantRequest) {
 
 async function tryComposeGeneralAnswer(request: AssistantRequest): Promise<string | null> {
   if (!env.openaiApiKey) return null;
-  const composed = await composeAssistantAnswer({
+  const composed = await composeConversationalAnswer({
     question: request.question,
     userProfile: request.userProfile,
     coordinates: request.coordinates,
-    places: [],
-    cityFacts: [],
-    sources: [],
     ...memoryPayload(request),
   });
   return composed?.text?.trim() || null;
@@ -315,7 +337,7 @@ function keywordFallbackIntent(request: AssistantRequest): IntentAnalysis {
     };
   }
   return {
-    intent: "unknown",
+    intent: "general_local",
     category: "other",
     searchQuery: request.question.trim() || "local",
     language: lang,
