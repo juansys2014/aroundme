@@ -2,21 +2,29 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LocalGuide AI — Vista web</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1, user-scalable=no"
+    />
+    <meta name="theme-color" content="#0f172a" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="AroundMe" />
+    <title>AroundMe — Guía local</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <div class="page">
-      <header class="page-header">
-        <h1>LocalGuide AI</h1>
-        <p>Vista web simulando un celular. El backend corre en el mismo servidor.</p>
+      <header class="page-header" aria-hidden="true">
+        <h1>AroundMe</h1>
+        <p>Vista de escritorio con marco de celular.</p>
       </header>
 
-      <div class="phone" aria-label="Simulador de celular">
-        <div class="phone-notch"></div>
+      <div class="phone" aria-label="AroundMe">
+        <div class="phone-notch" aria-hidden="true"></div>
         <main id="app" class="phone-screen"></main>
-        <div class="phone-home-bar"></div>
+        <div class="phone-home-bar" aria-hidden="true"></div>
       </div>
     </div>
 

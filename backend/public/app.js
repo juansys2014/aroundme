@@ -30,6 +30,89 @@ let dialogMicWanted = false;
 let lastGeocodeAt = 0;
 let lastLocationRenderAt = 0;
 
+function isMobileDevice() {
+  if (typeof window === "undefined") return false;
+  return window.matchMedia("(max-width: 768px), (pointer: coarse)").matches;
+}
+
+function isSecureForGeolocation() {
+  if (typeof window === "undefined") return false;
+  return window.isSecureContext === true;
+}
+
+function getLocationHelpMessage(errCode) {
+  if (!isSecureForGeolocation()) {
+    return {
+      text: "Para usar el GPS hace falta HTTPS (sitio seguro). Abrí AroundMe con https:// en lugar de http://.",
+      secure: true,
+    };
+  }
+  if (errCode === 1) {
+    return {
+      text: "Permiso de ubicación denegado. Tocá «Activar ubicación» o permitilo en ajustes del navegador y del teléfono.",
+      secure: false,
+    };
+  }
+  return {
+    text: "No se pudo obtener la ubicación. Revisá que el GPS esté encendido e intentá de nuevo.",
+    secure: false,
+  };
+}
+
+function buildLocationBanner(onRetry) {
+  const help = getLocationHelpMessage(
+    state.locationError?.includes("denegado") ? 1 : undefined
+  );
+  const msg = state.locationError || help.text;
+  const banner = el(
+    "div",
+    "location-banner" + (help.secure || msg.includes("HTTPS") ? " hint-secure" : "")
+  );
+  banner.appendChild(el("strong", null, "Ubicación necesaria"));
+  banner.appendChild(document.createTextNode(msg));
+  if (onRetry && isSecureForGeolocation()) {
+    const btn = el("button", "btn", "Activar ubicación");
+    btn.type = "button";
+    btn.onclick = () => onRetry();
+    banner.appendChild(btn);
+  }
+  return banner;
+}
+
+function requestLocationOnce(onSuccess, onError) {
+  if (!navigator.geolocation) {
+    onError(new Error("unsupported"));
+    return;
+  }
+  if (!isSecureForGeolocation()) {
+    onError(new Error("insecure"));
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    (pos) => onSuccess(pos),
+    (err) => onError(err),
+    { enableHighAccuracy: true, maximumAge: 0, timeout: 25000 }
+  );
+}
+
+function retryLocationPermission() {
+  state.locationLoading = true;
+  state.locationError = null;
+  render();
+  requestLocationOnce(
+    (pos) => {
+      applyPosition(pos);
+      if (locationWatchId == null) startLocationWatch();
+    },
+    (err) => {
+      state.locationLoading = false;
+      const help = getLocationHelpMessage(err?.code);
+      state.locationError = help.text;
+      render();
+    }
+  );
+}
+
 const INTERESTS = [
   "comida",
   "historia",
@@ -759,6 +842,13 @@ function startLocationWatch() {
     return;
   }
 
+  if (!isSecureForGeolocation()) {
+    state.locationLoading = false;
+    state.locationError = getLocationHelpMessage().text;
+    render();
+    return;
+  }
+
   if (locationWatchId != null) return;
 
   state.locationLoading = true;
@@ -769,13 +859,10 @@ function startLocationWatch() {
     (pos) => applyPosition(pos),
     (err) => {
       state.locationLoading = false;
-      state.locationError =
-        err.code === 1
-          ? "Permiso de ubicación denegado. Habilitalo en el navegador."
-          : "No se pudo obtener la ubicación.";
+      state.locationError = getLocationHelpMessage(err.code).text;
       render();
     },
-    { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 }
+    { enableHighAccuracy: true, maximumAge: 5000, timeout: 25000 }
   );
 }
 
@@ -1548,10 +1635,13 @@ function renderChat() {
       : "Esperando GPS";
   headerRow.appendChild(el("span", "hint chat-status", statusHint));
   header.appendChild(headerRow);
-  if (state.locationError) {
-    header.appendChild(el("div", "error", state.locationError));
-  }
   screen.appendChild(header);
+
+  if (!state.location && (state.locationError || !isSecureForGeolocation() || state.locationLoading === false)) {
+    if (state.locationError || !isSecureForGeolocation()) {
+      screen.appendChild(buildLocationBanner(retryLocationPermission));
+    }
+  }
 
   if (!state.location && state.locationLoading) {
     const waiting = el("div", "screen centered");
@@ -1567,8 +1657,10 @@ function renderChat() {
   if (activePlaces.length) {
     const hint =
       getProfile()?.language === "en"
-        ? 'Say: "open the map for the first one" or tap a card to select.'
-        : 'Decí: «apuntá este lugar», «esa me interesa, abrí el mapa», o «¿te acordás del restaurante X?».';
+        ? 'Tap a card or say: "open the map for the first one".'
+        : isMobileDevice()
+          ? "Tocá una tarjeta o decí «abrí el mapa»."
+          : 'Decí: «apuntá este lugar», «abrí el mapa», o «¿te acordás de…?».';
     screen.appendChild(el("p", "voice-hint interactive-hint", hint));
   }
 
