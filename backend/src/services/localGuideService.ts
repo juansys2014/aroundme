@@ -127,6 +127,31 @@ function isGreetingQuestion(question: string): boolean {
   return hints.some((h) => n === h || n.startsWith(`${h} `) || n.includes(h));
 }
 
+function isProfileNameQuestion(question: string): boolean {
+  const n = normalizeText(question.trim());
+  if (n.length > 90) return false;
+  return (
+    /como me llamo|como me llamas|como me llaman|cual es mi nombre|cual es mi name|como es mi nombre|sabes como me llamo|como te registro|me llamo\b/.test(
+      n
+    ) ||
+    /what is my name|what's my name|what do you call me|do you know my name/.test(n)
+  );
+}
+
+function buildProfileNameAnswer(request: AssistantRequest, lang: "es" | "en"): string {
+  const name = request.userProfile?.name?.trim();
+  if (lang === "en") {
+    if (name) {
+      return `You're ${name} — that's what's saved in your profile. How can I help you today?`;
+    }
+    return "I don't have your name yet. Add it in Settings so I can address you.";
+  }
+  if (name) {
+    return `Te llamás ${name}, según tu perfil. ¿En qué te ayudo?`;
+  }
+  return "Todavía no tengo tu nombre guardado. Podés cargarlo en Ajustes.";
+}
+
 function buildGreetingAnswer(request: AssistantRequest, lang: "es" | "en"): string {
   const n = normalizeText(request.question);
   const name = request.userProfile?.name?.trim();
@@ -533,6 +558,16 @@ export async function runAssistantPipeline(request: AssistantRequest): Promise<A
   if (isMemoryRecallQuestion(request.question)) {
     const lang = request.userProfile?.language ?? "es";
     return buildMemoryRecallResponse(request, lang);
+  }
+
+  if (isProfileNameQuestion(request.question)) {
+    const lang = request.userProfile?.language ?? "es";
+    return {
+      answer: buildProfileNameAnswer(request, lang),
+      simulated: false,
+      location: { ...request.coordinates },
+      sources: [],
+    };
   }
 
   if (!env.enableRealProviders) {

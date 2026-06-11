@@ -608,6 +608,8 @@ function scoreVoiceForLocale(voice, locale) {
   if (loc === "en-gb" && (lang === "en-gb" || name.includes("united kingdom") || name.includes("british"))) {
     score += 10;
   }
+  if (/google|natural|premium|enhanced|neural|wavenet|online/.test(name)) score += 12;
+  if (/compact|espeak|robotic|synthetic|microsoft david|microsoft helena/.test(name)) score -= 8;
   return score;
 }
 
@@ -636,12 +638,7 @@ function pickVoice() {
     const match = voices.find((v) => v.voiceURI === saved);
     if (match) return match;
   }
-  const lang = getSpeechLang();
-  return (
-    voices.find((v) => v.lang === lang) ||
-    voices.find((v) => v.lang.startsWith(getSpeechLangPrefix())) ||
-    voices[0]
-  );
+  return voices[0];
 }
 
 function initSpeechVoices() {
@@ -895,7 +892,8 @@ function speakText(text, onEnd) {
   if (state.screen === "chat") render();
   const utter = new SpeechSynthesisUtterance(text.trim());
   utter.lang = getSpeechLang();
-  utter.rate = 1;
+  utter.rate = 0.92;
+  utter.pitch = 1.02;
   const voice = pickVoice();
   if (voice) utter.voice = voice;
   const finish = () => {
@@ -1971,7 +1969,7 @@ function renderSettings() {
 
   screen.appendChild(el("h3", "settings-section", "Voz del asistente"));
   screen.appendChild(
-    el("p", "hint", "Elegí el acento. En Windows/Chrome podés instalar más voces en configuración del sistema.")
+    el("p", "hint", "Para sonar más natural, elegí una voz «Google» o «Enhanced» en Locutor y probala abajo.")
   );
 
   screen.appendChild(el("div", "label", "Acento / región"));
